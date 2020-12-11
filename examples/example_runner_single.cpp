@@ -68,7 +68,7 @@ void vuk::ExampleRunner::render() {
 		auto ifc = context->begin();
 		auto rg = examples[0]->render(*this, ifc);
 		std::string attachment_name = std::string(examples[0]->name) + "_final";
-		rg.attach_swapchain(attachment_name, swapchain, vuk::ClearColor{ 0.3f, 0.5f, 0.3f, 1.0f });
+		rg.attach_swapchain(attachment_name, swapchain, vuk::ClearColor{ 0.3f, 0.3f, 0.3f, 1.0f });
 		auto ptc = ifc.begin();
 		
 		ImGui::Render();
