@@ -4,8 +4,8 @@
 #include <plf_colony.h>
 #include <mutex>
 #include <vector>
-#include "vuk/vuk_fwd.hpp"
-#include <vulkan/vulkan.h>
+#include <vuk/vuk_fwd.hpp>
+#include <vuk/Config.hpp>
 
 namespace vuk {
 	template<class T>
@@ -28,10 +28,27 @@ namespace vuk {
 		std::vector<VkCommandBuffer> p_values;
 		std::vector<VkCommandBuffer> s_values;
 		size_t p_needle = 0;
-        size_t s_needle = 0;
+		size_t s_needle = 0;
 
 		PooledType(Context&);
 		std::span<VkCommandBuffer> acquire(PerThreadContext& ptc, VkCommandBufferLevel, size_t count);
+		void reset(Context&);
+		void free(Context&);
+	};
+
+	struct TimestampQuery;
+
+	template<>
+	struct PooledType<TimestampQuery> {
+		VkQueryPool pool;
+		std::vector<TimestampQuery> values;
+		std::vector<uint64_t> host_values;
+		std::vector<std::pair<uint64_t, uint64_t>> id_to_value_mapping;
+		size_t needle = 0;
+
+		PooledType(Context&);
+		std::span<TimestampQuery> acquire(PerThreadContext& ptc, size_t count);
+		void get_results(Context&);
 		void reset(Context&);
 		void free(Context&);
 	};
@@ -46,7 +63,7 @@ namespace vuk {
 		std::array<plf::colony<PooledType<T>>, FC> per_frame_storage;
 		Context& ctx;
 
-		Pool(Context& ctx) : ctx(ctx) {	}
+		Pool(Context& ctx) : ctx(ctx) {}
 
 		PooledType<T>* acquire_one_into(plf::colony<PooledType<T>>& dst) {
 			std::lock_guard _(lock);
@@ -55,8 +72,7 @@ namespace vuk {
 				auto new_it = dst.emplace(std::move(last_elem));
 				store.erase(--store.end());
 				return &*new_it;
-			}
-			else {
+			} 			else {
 				return &*dst.emplace(PooledType<T>(ctx));
 			}
 		}
@@ -86,7 +102,7 @@ namespace vuk {
 			PooledType<T>& pool;
 
 			PFPTView(PerThreadContext& ptc, PooledType<T>& pool) : ptc(ptc), pool(pool) {}
-			
+
 			template<class... Args>
 			decltype(auto) acquire(Args&&... args) {
 				return pool.acquire(ptc, std::forward<Args>(args)...);

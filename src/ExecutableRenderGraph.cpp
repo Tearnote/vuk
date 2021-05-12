@@ -76,7 +76,7 @@ namespace vuk {
 			return;
 		}
 
-		VkRenderPassBeginInfo rbi{.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+		VkRenderPassBeginInfo rbi{ .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
 		rbi.renderPass = rpass.handle;
 		rbi.framebuffer = rpass.framebuffer;
 		rbi.renderArea = VkRect2D{ vuk::Offset2D{}, vuk::Extent2D{ rpass.fbci.width, rpass.fbci.height } };
@@ -103,67 +103,76 @@ namespace vuk {
 		rpi.extent = vuk::Extent2D{ rpass.fbci.width, rpass.fbci.height };
 		auto& spdesc = rpass.rpci.subpass_descriptions[i];
 		rpi.color_attachments = std::span<const VkAttachmentReference>(spdesc.pColorAttachments, spdesc.colorAttachmentCount);
-		for (auto& ca : rpi.color_attachments) {
-			auto& att = rpass.attachments[ca.attachment];
-			if (!att.samples.infer)
-				rpi.samples = att.samples.count;
-		}
-		// TODO: depth could be msaa too
-		if (rpi.color_attachments.size() == 0) { // depth only pass, samples == 1
-			rpi.samples = vuk::SampleCountFlagBits::e1;
-		}
+		rpi.samples = rpass.fbci.sample_count.count;
 		cobuf.ongoing_renderpass = rpi;
 	}
 
 	VkCommandBuffer ExecutableRenderGraph::execute(vuk::PerThreadContext& ptc, std::vector<std::pair<SwapChainRef, size_t>> swp_with_index) {
-		// create framebuffers, create & bind attachments
-		for (auto& rp : impl->rpis) {
-			if (rp.attachments.size() == 0)
-				continue;
-
-			vuk::Extent2D fb_extent;
-			bool extent_known = false;
-
-			// bind swapchain attachments, deduce framebuffer size & sample count
-			for (auto& attrpinfo : rp.attachments) {
-				auto& bound = impl->bound_attachments[attrpinfo.name];
-
-				if (bound.type == AttachmentRPInfo::Type::eSwapchain) {
-					auto it = std::find_if(swp_with_index.begin(), swp_with_index.end(), [&](auto& t) { return t.first == bound.swapchain; });
-					bound.iv = it->first->image_views[it->second];
-					bound.image = it->first->images[it->second];
-					fb_extent = it->first->extent;
-					bound.extents = Dimension2D::absolute(it->first->extent);
-					extent_known = true;
-				} else {
-					if (bound.extents.sizing == Sizing::eAbsolute) {
-						fb_extent = bound.extents.extent;
-						extent_known = true;
-					}
-				}
-			}
-
-			if (extent_known) {
-				rp.fbci.width = fb_extent.width;
-				rp.fbci.height = fb_extent.height;
-			}
-
-			for (auto& attrpinfo : rp.attachments) {
-				auto& bound = impl->bound_attachments[attrpinfo.name];
-				if (extent_known) {
-					bound.extents = Dimension2D::absolute(fb_extent);
-				}
-			}
-		}
-
+		// bind swapchain attachment images & ivs
 		for (auto& [name, bound] : impl->bound_attachments) {
 			if (bound.type == AttachmentRPInfo::Type::eSwapchain) {
 				auto it = std::find_if(swp_with_index.begin(), swp_with_index.end(), [boundb = &bound](auto& t) { return t.first == boundb->swapchain; });
 				bound.iv = it->first->image_views[it->second];
 				bound.image = it->first->images[it->second];
+				bound.extents = Dimension2D::absolute(it->first->extent);
+				bound.samples = vuk::Samples::e1;
 			}
 		}
-	
+
+		// perform size inference for framebuffers (we need to do this here due to swapchain attachments)
+		// loop through all renderpasses, and attempt to infer any size we can
+		// then loop again, stopping if we have inferred all or have not made progress
+		bool infer_progress = false;
+		bool any_fb_incomplete = false;
+		do {
+			any_fb_incomplete = false;
+			infer_progress = false;
+			for (auto& rp : impl->rpis) {
+				if (rp.attachments.size() == 0) {
+					continue;
+				}
+
+				// an extent is known if it is not 0
+				// 0 sized framebuffers are illegal
+				Extent2D fb_extent = Extent2D{ rp.fbci.width, rp.fbci.height };
+				bool extent_known = !(fb_extent.width == 0 || fb_extent.height == 0);
+
+				if (extent_known) {
+					continue;
+				}
+
+				// see if any attachment has an absolute size
+				for (auto& attrpinfo : rp.attachments) {
+					auto& bound = impl->bound_attachments[attrpinfo.name];
+
+					if (bound.extents.sizing == vuk::Sizing::eAbsolute && bound.extents.extent.width > 0 && bound.extents.extent.height > 0) {
+						fb_extent = bound.extents.extent;
+						extent_known = true;
+						break;
+					}
+				}
+
+				if (extent_known) {
+					rp.fbci.width = fb_extent.width;
+					rp.fbci.height = fb_extent.height;
+
+					for (auto& attrpinfo : rp.attachments) {
+						auto& bound = impl->bound_attachments[attrpinfo.name];
+						bound.extents = Dimension2D::absolute(fb_extent);
+					}
+
+					infer_progress = true; // progress made
+				}
+
+				if (!extent_known) {
+					any_fb_incomplete = true;
+				}
+			}
+		} while (any_fb_incomplete || infer_progress); // stop looping if all attachment have been sized or we made no progress
+
+		assert(!any_fb_incomplete && "Failed to infer size for all attachments.");
+
+		// create framebuffers, create & bind attachments
 		for (auto& rp : impl->rpis) {
 			if (rp.attachments.size() == 0)
 				continue;
@@ -171,19 +180,7 @@ namespace vuk {
 			auto& ivs = rp.fbci.attachments;
 			std::vector<VkImageView> vkivs;
 
-			Extent2D fb_extent = Extent2D{rp.fbci.width, rp.fbci.height};
-			
-			// do a second pass so that we can infer from the attachments we previously inferred from
-			// TODO: we should allow arbitrary number of passes
-			if (fb_extent.width == 0 || fb_extent.height == 0) {
-				for (auto& attrpinfo : rp.attachments) {
-					auto& bound = impl->bound_attachments[attrpinfo.name];
-					if (bound.extents.extent.width > 0 && bound.extents.extent.height > 0) {
-						fb_extent = bound.extents.extent;
-					}
-				}
-			}
-			// TODO: check here if all attachments have been sized
+			Extent2D fb_extent = Extent2D{ rp.fbci.width, rp.fbci.height };
 
 			// create internal attachments; bind attachments to fb
 			for (auto& attrpinfo : rp.attachments) {
@@ -207,20 +204,20 @@ namespace vuk {
 		// create non-attachment images
 		for (auto& [name, bound] : impl->bound_attachments) {
 			if (bound.type == AttachmentRPInfo::Type::eInternal && bound.image == VK_NULL_HANDLE) {
-				create_attachment(ptc, name, bound, vuk::Extent2D{0,0}, bound.samples.count);
+				create_attachment(ptc, name, bound, vuk::Extent2D{ 0,0 }, bound.samples.count);
 			}
 		}
 
 		// actual execution
 		auto cbuf = ptc.acquire_command_buffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 
-		VkCommandBufferBeginInfo cbi{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+		VkCommandBufferBeginInfo cbi{ .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
 		vkBeginCommandBuffer(cbuf, &cbi);
 
 		CommandBuffer cobuf(*this, ptc, cbuf);
 		for (auto& rpass : impl->rpis) {
-            bool use_secondary_command_buffers = rpass.subpasses[0].use_secondary_command_buffers;
-            begin_renderpass(rpass, cbuf, use_secondary_command_buffers);
+			bool use_secondary_command_buffers = rpass.subpasses[0].use_secondary_command_buffers;
+			begin_renderpass(rpass, cbuf, use_secondary_command_buffers);
 			for (size_t i = 0; i < rpass.subpasses.size(); i++) {
 				auto& sp = rpass.subpasses[i];
 				fill_renderpass_info(rpass, i, cobuf);
@@ -234,42 +231,43 @@ namespace vuk {
 						vkCmdPipelineBarrier(cbuf, (VkPipelineStageFlags)dep.src, (VkPipelineStageFlags)dep.dst, 0, 1, &dep.barrier, 0, nullptr, 0, nullptr);
 					}
 				}
-                for(auto& p: sp.passes) {
+				for (auto& p : sp.passes) {
 					// if pass requested no secondary cbufs, but due to subpass merging that is what we got
 					if (p->pass.use_secondary_command_buffers == false && use_secondary_command_buffers == true) {
-                        auto secondary = cobuf.begin_secondary();
-                        if(p->pass.execute) {
-                            secondary.current_pass = p;
-                            if(!p->pass.name.empty()) {
-                                //ptc.ctx.debug.begin_region(cobuf.command_buffer, sp.pass->pass.name);
-                                p->pass.execute(secondary);
-                                //ptc.ctx.debug.end_region(cobuf.command_buffer);
-                            } else {
-                                p->pass.execute(secondary);
-                            }
-                        }
-                        auto result = secondary.get_buffer();
-                        cobuf.execute({&result, 1});
-                    } else {
-                        if(p->pass.execute) {
-                            cobuf.current_pass = p;
-                            if(!p->pass.name.empty()) {
-                                //ptc.ctx.debug.begin_region(cobuf.command_buffer, sp.pass->pass.name);
-                                p->pass.execute(cobuf);
-                                //ptc.ctx.debug.end_region(cobuf.command_buffer);
-                            } else {
-                                p->pass.execute(cobuf);
-                            }
-                        }
+						auto secondary = cobuf.begin_secondary();
+						if (p->pass.execute) {
+							secondary.current_pass = p;
+							if (!p->pass.name.is_invalid()) {
+								//ptc.ctx.debug.begin_region(cobuf.command_buffer, sp.pass->pass.name);
+								p->pass.execute(secondary);
+								//ptc.ctx.debug.end_region(cobuf.command_buffer);
+							} else {
+								p->pass.execute(secondary);
+							}
+						}
+						auto result = secondary.get_buffer();
+						cobuf.execute({ &result, 1 });
+					} else {
+						if (p->pass.execute) {
+							cobuf.current_pass = p;
+							if (!p->pass.name.is_invalid()) {
+								//ptc.ctx.debug.begin_region(cobuf.command_buffer, sp.pass->pass.name);
+								p->pass.execute(cobuf);
+								//ptc.ctx.debug.end_region(cobuf.command_buffer);
+							} else {
+								p->pass.execute(cobuf);
+							}
+						}
 
-                        cobuf.attribute_descriptions.clear();
-                        cobuf.binding_descriptions.clear();
-                        cobuf.set_bindings = {};
-                        cobuf.sets_used = {};
-                    }
-                }
+						cobuf.pcrs.clear();
+						cobuf.attribute_descriptions.clear();
+						cobuf.binding_descriptions.clear();
+						cobuf.set_bindings = {};
+						cobuf.sets_used = {};
+					}
+				}
 				if (i < rpass.subpasses.size() - 1 && rpass.handle != VK_NULL_HANDLE) {
-                    use_secondary_command_buffers = rpass.subpasses[i + 1].use_secondary_command_buffers;
+					use_secondary_command_buffers = rpass.subpasses[i + 1].use_secondary_command_buffers;
 					vkCmdNextSubpass(cbuf, use_secondary_command_buffers ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS : VK_SUBPASS_CONTENTS_INLINE);
 				}
 
@@ -286,23 +284,23 @@ namespace vuk {
 			}
 			if (rpass.handle != VK_NULL_HANDLE) {
 				vkCmdEndRenderPass(cbuf);
-                for(auto dep: rpass.post_barriers) {
-                    dep.barrier.image = impl->bound_attachments[dep.image].image;
-                    vkCmdPipelineBarrier(cbuf, (VkPipelineStageFlags)dep.src, (VkPipelineStageFlags)dep.dst, 0, 0, nullptr, 0, nullptr, 1, &dep.barrier);
-                }
-                for(auto dep: rpass.post_mem_barriers) {
-                    vkCmdPipelineBarrier(cbuf, (VkPipelineStageFlags)dep.src, (VkPipelineStageFlags)dep.dst, 0, 1, &dep.barrier, 0, nullptr, 0, nullptr);
-                }
+				for (auto dep : rpass.post_barriers) {
+					dep.barrier.image = impl->bound_attachments[dep.image].image;
+					vkCmdPipelineBarrier(cbuf, (VkPipelineStageFlags)dep.src, (VkPipelineStageFlags)dep.dst, 0, 0, nullptr, 0, nullptr, 1, &dep.barrier);
+				}
+				for (auto dep : rpass.post_mem_barriers) {
+					vkCmdPipelineBarrier(cbuf, (VkPipelineStageFlags)dep.src, (VkPipelineStageFlags)dep.dst, 0, 1, &dep.barrier, 0, nullptr, 0, nullptr);
+				}
 			}
 		}
 		vkEndCommandBuffer(cbuf);
 		return cbuf;
 	}
-	
+
 	BufferInfo ExecutableRenderGraph::get_resource_buffer(Name n) {
 		return impl->bound_buffers.at(n);
 	}
-	
+
 	AttachmentRPInfo ExecutableRenderGraph::get_resource_image(Name n) {
 		return impl->bound_attachments.at(n);
 	}
@@ -314,7 +312,7 @@ namespace vuk {
 				return elem.use.layout == vuk::ImageLayout::eGeneral;
 			}
 		}
-		assert(0);
+		assert(false && "Image resourced was not declared to be used in this pass, but was referred to.");
 		return false;
 	}
 } // namespace vuk

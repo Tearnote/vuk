@@ -30,7 +30,6 @@ namespace vuk {
 
 	struct Resource {
 		Name name;
-		unsigned hash_name;
 		enum class Type { eBuffer, eImage } type;
 		Access ia;
 		struct Use {
@@ -39,12 +38,10 @@ namespace vuk {
 			vuk::ImageLayout layout; // ignored for buffers
 		};
 
-		Resource(Name n, Type t, Access ia) : name(n), type(t), ia(ia) {
-			hash_name = hash::fnv1a::hash(name.data(), name.size(), hash::fnv1a::default_offset_basis);
-		}
+		Resource(Name n, Type t, Access ia) : name(n), type(t), ia(ia) {}
 
 		bool operator==(const Resource& o) const noexcept {
-			return hash_name == o.hash_name;
+			return name == o.name;
 		}
 	};
 
@@ -81,6 +78,10 @@ namespace vuk {
 
 		std::function<void(vuk::CommandBuffer&)> execute;
 	};
+
+	// declare these specializations for GCC
+	template<> ConstMapIterator<Name, std::span<const struct UseRef>>::~ConstMapIterator();
+	template<> ConstMapIterator<Name, const struct AttachmentRPInfo&>::~ConstMapIterator();
 
 	struct RenderGraph {
 		RenderGraph();

@@ -24,8 +24,8 @@ namespace {
 		.setup = [](vuk::ExampleRunner& runner, vuk::InflightContext& ifc) {
 			{
 			vuk::PipelineBaseCreateInfo pci;
-			pci.add_shader(util::read_entire_file("../../examples/ubo_test_tex.vert"), "ubo_test_tex.vert");
-			pci.add_shader(util::read_entire_file("../../examples/triangle_depthshaded_tex.frag"), "triangle_depthshaded_tex.frag");
+			pci.add_glsl(util::read_entire_file("../../examples/ubo_test_tex.vert"), "ubo_test_tex.vert");
+			pci.add_glsl(util::read_entire_file("../../examples/triangle_depthshaded_tex.frag"), "triangle_depthshaded_tex.frag");
 			runner.context->create_named_pipeline("textured_cube", pci);
 			}
 
@@ -35,7 +35,7 @@ namespace {
 			
 			auto ptc = ifc.begin();
 			// Similarly to buffers, we allocate the image and enqueue the upload
-			auto [tex, _] = ptc.create_texture(vuk::Format::eR8G8B8A8Srgb, vuk::Extent3D{ (unsigned)x, (unsigned)y, 1u }, doge_image);
+			auto [tex, _] = ptc.create_texture(vuk::Format::eR8G8B8A8Srgb, vuk::Extent3D{ (unsigned)x, (unsigned)y, 1u }, doge_image, true);
 			texture_of_doge = std::move(tex);
 			ptc.wait_all_transfers();
 			stbi_image_free(doge_image);

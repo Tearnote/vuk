@@ -10,10 +10,16 @@
 #include "vuk/Image.hpp"
 #include "vuk/Buffer.hpp"
 #include "vuk/Swapchain.hpp"
+#include "vuk/Query.hpp"
 
 namespace vuk {
 	struct TransferStub {
 		size_t id;
+	};
+
+	struct TimestampQuery {
+		VkQueryPool pool;
+		uint32_t id;
 	};
 
 	struct ContextCreateParameters {
@@ -63,19 +69,21 @@ namespace vuk {
 			void end_region(const VkCommandBuffer&);
 		} debug;
 
-		void create_named_pipeline(const char* name, vuk::PipelineBaseCreateInfo pbci);
-		void create_named_pipeline(const char* name, vuk::ComputePipelineCreateInfo pbci);
+		void create_named_pipeline(Name name, vuk::PipelineBaseCreateInfo pbci);
+		void create_named_pipeline(Name name, vuk::ComputePipelineCreateInfo pbci);
 
-		PipelineBaseInfo* get_named_pipeline(const char* name);
-		ComputePipelineInfo* get_named_compute_pipeline(const char* name);
+		PipelineBaseInfo* get_named_pipeline(Name name);
+		ComputePipelineInfo* get_named_compute_pipeline(Name name);
 
 		PipelineBaseInfo* get_pipeline(const PipelineBaseCreateInfo& pbci);
 		ComputePipelineInfo* get_pipeline(const ComputePipelineCreateInfo& pbci);
 		Program get_pipeline_reflection_info(PipelineBaseCreateInfo pbci);
-		ShaderModule compile_shader(std::string source, Name path);
+		ShaderModule compile_shader(ShaderSource source, std::string path);
 
 		bool load_pipeline_cache(std::span<uint8_t> data);
 		std::vector<uint8_t> save_pipeline_cache();
+
+		Query create_timestamp_query();
 
 		uint32_t(*get_thread_index)() = nullptr;
 
@@ -106,8 +114,8 @@ namespace vuk {
 				std::span<unsigned char> data;
 			};
 
-			UploadItem(BufferUpload bu) : is_buffer(true), buffer(std::move(bu)) {}
-			UploadItem(ImageUpload bu) : is_buffer(false), image(std::move(bu)) {}
+			UploadItem(BufferUpload bu) : buffer(std::move(bu)), is_buffer(true) {}
+			UploadItem(ImageUpload bu) : image(std::move(bu)), is_buffer(false) {}
 
 			union {
 				BufferUpload buffer = {};
@@ -152,8 +160,8 @@ namespace vuk {
 
 		/// @brief Remove a swapchain that is managed by the Context
 		/// the swapchain is not destroyed
-        void remove_swapchain(SwapchainRef);
-		
+		void remove_swapchain(SwapchainRef);
+
 		/// @brief Begin new frame, with a new InflightContext
 		/// @return the new InflightContext
 		InflightContext begin();
@@ -215,6 +223,10 @@ namespace vuk {
 		void wait_all_transfers();
 		PerThreadContext begin();
 
+		std::optional<uint64_t> get_timestamp_query_result(Query);
+		std::optional<double> get_duration_query_result(Query start, Query end);
+		//std::optional<double> get_named_timestamp_query_results(Name);
+
 		std::vector<SampledImage> get_sampled_images();
 	private:
 		struct IFCImpl* impl;
@@ -226,6 +238,7 @@ namespace vuk {
 
 		TransferStub enqueue_transfer(Buffer src, Buffer dst);
 		TransferStub enqueue_transfer(Buffer src, vuk::Image dst, vuk::Extent3D extent, uint32_t base_layer, bool generate_mips);
+
 		void destroy(std::vector<vuk::Image>&& images);
 		void destroy(std::vector<VkImageView>&& images);
 	};
@@ -242,6 +255,9 @@ namespace vuk {
 		PerThreadContext(const PerThreadContext& o) = delete;
 		PerThreadContext& operator=(const PerThreadContext& o) = delete;
 
+		/// @brief Checks if the given transfer is complete (ready)
+		/// @param stub The transfer to check
+		/// @return True if the transfer has completed
 		bool is_ready(const TransferStub& stub);
 		void wait_all_transfers();
 
@@ -251,33 +267,52 @@ namespace vuk {
 		void commit_persistent_descriptorset(PersistentDescriptorSet& array);
 
 		size_t get_allocation_size(Buffer);
-		Buffer _allocate_scratch_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment, bool create_mapped);
-		Unique<Buffer> _allocate_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment, bool create_mapped);
+		/// @brief Allocates a scratch buffer, i.e. a buffer that has its lifetime bound to the current inflight frame
+		/// @param mem_usage Where to allocate the buffer (host visible buffers will be automatically mapped)
+		/// @param buffer_usage How this buffer will be used
+		/// @param size Size of the buffer
+		/// @param alignment Alignment of the buffer
+		/// @return The allocated Buffer
+		Buffer allocate_scratch_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment);
 
-		// since data is provided, we will add TransferDst to the flags automatically
+		/// @brief Allocates a buffer with explicitly managed lifetime
+		/// @param mem_usage Where to allocate the buffer (host visible buffers will be automatically mapped)
+		/// @param buffer_usage How this buffer will be used
+		/// @param size Size of the buffer
+		/// @param alignment Alignment of the buffer
+		/// @return The allocated Buffer
+		Unique<Buffer> allocate_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment);
+
+		/// @brief Allocates & fills a scratch buffer, i.e. a buffer that has its lifetime bound to the current inflight frame
+		/// @param mem_usage Where to allocate the buffer (host visible buffers will be automatically mapped)
+		/// @param buffer_usage How this buffer will be used (since data is provided, TransferDst is added to the flags)
+		/// @return The allocated Buffer
 		template<class T>
 		std::pair<Buffer, TransferStub> create_scratch_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, std::span<T> data) {
-			auto dst = _allocate_scratch_buffer(mem_usage, vuk::BufferUsageFlagBits::eTransferDst | buffer_usage, sizeof(T) * data.size(), 1, false);
+			auto dst = allocate_scratch_buffer(mem_usage, vuk::BufferUsageFlagBits::eTransferDst | buffer_usage, sizeof(T) * data.size(), 1);
 			auto stub = upload(dst, data);
 			return { dst, stub };
 		}
 
+		/// @brief Allocates & fills a buffer with explicitly managed lifetime
+		/// @param mem_usage Where to allocate the buffer (host visible buffers will be automatically mapped)
+		/// @param buffer_usage How this buffer will be used (since data is provided, TransferDst is added to the flags)
+		/// @return The allocated Buffer
 		template<class T>
 		std::pair<Unique<Buffer>, TransferStub> create_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, std::span<T> data) {
-			auto dst = _allocate_buffer(mem_usage, vuk::BufferUsageFlagBits::eTransferDst | buffer_usage, sizeof(T) * data.size(), 1, false);
+			auto dst = allocate_buffer(mem_usage, vuk::BufferUsageFlagBits::eTransferDst | buffer_usage, sizeof(T) * data.size(), 1);
 			auto stub = upload(*dst, data);
 			return { std::move(dst), stub };
 		}
 
-
 		vuk::Texture allocate_texture(vuk::ImageCreateInfo);
-		std::pair<vuk::Texture, TransferStub> create_texture(vuk::Format format, vuk::Extent3D extents, void* data);
+		std::pair<vuk::Texture, TransferStub> create_texture(vuk::Format format, vuk::Extent3D extents, void* data, bool generate_mips = false);
 		Unique<ImageView> create_image_view(vuk::ImageViewCreateInfo);
 
 		template<class T>
 		TransferStub upload(Buffer dst, std::span<T> data) {
 			if (data.empty()) return { 0 };
-			auto staging = _allocate_scratch_buffer(MemoryUsage::eCPUonly, vuk::BufferUsageFlagBits::eTransferSrc, sizeof(T) * data.size(), 1, true);
+			auto staging = allocate_scratch_buffer(MemoryUsage::eCPUonly, vuk::BufferUsageFlagBits::eTransferSrc, sizeof(T) * data.size(), 1);
 			::memcpy(staging.mapped_ptr, data.data(), sizeof(T) * data.size());
 
 			return ifc.enqueue_transfer(staging, dst);
@@ -288,7 +323,7 @@ namespace vuk {
 			assert(!data.empty());
 			// compute staging buffer alignment as texel block size
 			size_t alignment = format_to_texel_block_size(format);
-			auto staging = _allocate_scratch_buffer(MemoryUsage::eCPUonly, vuk::BufferUsageFlagBits::eTransferSrc, sizeof(T) * data.size(), alignment, true);
+			auto staging = allocate_scratch_buffer(MemoryUsage::eCPUonly, vuk::BufferUsageFlagBits::eTransferSrc, sizeof(T) * data.size(), alignment);
 			::memcpy(staging.mapped_ptr, data.data(), sizeof(T) * data.size());
 
 			return ifc.enqueue_transfer(staging, dst, extent, base_layer, generate_mips);
@@ -301,6 +336,8 @@ namespace vuk {
 		vuk::SampledImage& make_sampled_image(Name n, vuk::ImageViewCreateInfo ivci, vuk::SamplerCreateInfo sci);
 
 		vuk::Program get_pipeline_reflection_info(vuk::PipelineBaseCreateInfo pci);
+
+		TimestampQuery register_timestamp_query(Query);
 
 		template<class T>
 		void destroy(const T& t) {
@@ -347,7 +384,7 @@ namespace vuk {
 	void Context::DebugUtils::set_name(const T& t, Name name) {
 		if (!enabled()) return;
 		VkDebugUtilsObjectNameInfoEXT info = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
-		info.pObjectName = name.data();
+		info.pObjectName = name.c_str();
 		if constexpr (std::is_same_v<T, VkImage>) {
 			info.objectType = VK_OBJECT_TYPE_IMAGE;
 		} else if constexpr (std::is_same_v<T, VkImageView>) {

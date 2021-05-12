@@ -6,9 +6,10 @@
 #include <utility>
 #include <VkBootstrap.h>
 #include <imgui.h>
-#include "vuk/Types.hpp"
-#include "vuk/Context.hpp"
-#include "vuk/Swapchain.hpp"
+#include <vuk/vuk_fwd.hpp>
+#include <vuk/Types.hpp>
+#include <vuk/Context.hpp>
+#include <vuk/Swapchain.hpp>
 #include <string_view>
 #include <fstream>
 #include <sstream>
@@ -16,7 +17,6 @@
 namespace vuk {
 	class PerThreadContext;
 	struct Pass;
-	using Name = std::string_view;
 	struct RenderGraph;
 }
 
@@ -102,5 +102,16 @@ namespace util {
 		assert(input);
 		buf << input.rdbuf();
 		return buf.str();
+	}
+
+	inline std::vector<uint32_t> read_spirv(const std::string& path) {
+		std::ostringstream buf;
+		std::ifstream input(path.c_str(), std::ios::ate | std::ios::binary);
+		assert(input);
+		size_t file_size = (size_t)input.tellg();
+		std::vector<uint32_t> buffer(file_size / sizeof(uint32_t));
+		input.seekg(0);
+		input.read(reinterpret_cast<char *>(buffer.data()), file_size);
+		return buffer;
 	}
 }

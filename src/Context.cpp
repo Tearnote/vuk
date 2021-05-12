@@ -1,14 +1,16 @@
+#if VUK_USE_SHADERC
 #include <shaderc/shaderc.hpp>
+#endif
 #include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <spirv_cross.hpp>
 
-#include "vuk/Context.hpp"
-#include "ContextImpl.hpp"
-#include "vuk/RenderGraph.hpp"
-#include "vuk/Program.hpp"
-#include "vuk/Exception.hpp"
+#include <vuk/Context.hpp>
+#include <ContextImpl.hpp>
+#include <vuk/RenderGraph.hpp>
+#include <vuk/Program.hpp>
+#include <vuk/Exception.hpp>
 
 vuk::Context::Context(ContextCreateParameters params) :
 	instance(params.instance),
@@ -41,7 +43,7 @@ void vuk::Context::DebugUtils::set_name(const vuk::Texture& tex, Name name) {
 void vuk::Context::DebugUtils::begin_region(const VkCommandBuffer& cb, Name name, std::array<float, 4> color) {
 	if (!enabled()) return;
 	VkDebugUtilsLabelEXT label = { .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT };
-	label.pLabelName = name.data();
+	label.pLabelName = name.c_str();
 	::memcpy(label.color, color.data(), sizeof(float) * 4);
 	cmdBeginDebugUtilsLabelEXT(cb, &label);
 }
@@ -88,31 +90,39 @@ void vuk::PersistentDescriptorSet::update_storage_image(PerThreadContext& ptc, u
 }
 
 vuk::ShaderModule vuk::Context::create(const create_info_t<vuk::ShaderModule>& cinfo) {
-	shaderc::Compiler compiler;
-	shaderc::CompileOptions options;
-	options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
+	// given source is GLSL, compile it via shaderc
+#if VUK_USE_SHADERC
+	shaderc::SpvCompilationResult result;
+	if (!cinfo.source.is_spirv) {
+		shaderc::Compiler compiler;
+		shaderc::CompileOptions options;
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
 
-	shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(cinfo.source, shaderc_glsl_infer_from_source, cinfo.filename.c_str(), options);
+		result = compiler.CompileGlslToSpv(cinfo.source.as_glsl(), shaderc_glsl_infer_from_source, cinfo.filename.c_str(), options);
 
-	if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
-		std::string message = result.GetErrorMessage().c_str();
-		throw ShaderCompilationException{ message };
-	} else {
-		std::vector<uint32_t> spirv(result.cbegin(), result.cend());
-
-		spirv_cross::Compiler refl(spirv.data(), spirv.size());
-		vuk::Program p;
-		auto stage = p.introspect(refl);
-
-		VkShaderModuleCreateInfo moduleCreateInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-		moduleCreateInfo.codeSize = spirv.size() * sizeof(uint32_t);
-		moduleCreateInfo.pCode = spirv.data();
-		VkShaderModule sm;
-		vkCreateShaderModule(device, &moduleCreateInfo, nullptr, &sm);
-		std::string name = "ShaderModule: " + cinfo.filename;
-		debug.set_name(sm, name);
-		return { sm, p, stage };
+		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
+			std::string message = result.GetErrorMessage().c_str();
+			throw ShaderCompilationException{ message };
+		}
 	}
+
+	const std::vector<uint32_t>& spirv = cinfo.source.is_spirv ? cinfo.source.data : std::vector<uint32_t>(result.cbegin(), result.cend());
+#else
+	assert(cinfo.source.is_spirv && "Shaderc not enabled (VUK_USE_SHADERC == OFF), no runtime compilation possible.");
+	const std::vector<uint32_t>& spirv = cinfo.source.data;
+#endif
+	spirv_cross::Compiler refl(spirv.data(), spirv.size());
+	vuk::Program p;
+	auto stage = p.introspect(refl);
+
+	VkShaderModuleCreateInfo moduleCreateInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+	moduleCreateInfo.codeSize = spirv.size() * sizeof(uint32_t);
+	moduleCreateInfo.pCode = spirv.data();
+	VkShaderModule sm;
+	vkCreateShaderModule(device, &moduleCreateInfo, nullptr, &sm);
+	std::string name = "ShaderModule: " + cinfo.filename;
+	debug.set_name(sm, Name(name));
+	return { sm, p, stage };
 }
 
 vuk::PipelineBaseInfo vuk::Context::create(const create_info_t<PipelineBaseInfo>& cinfo) {
@@ -123,7 +133,7 @@ vuk::PipelineBaseInfo vuk::Context::create(const create_info_t<PipelineBaseInfo>
 	std::string pipe_name = "Pipeline:";
 	for (auto i = 0; i < cinfo.shaders.size(); i++) {
 		auto contents = cinfo.shaders[i];
-		if (contents.empty())
+		if (contents.data.empty())
 			continue;
 		auto& sm = impl->shader_modules.acquire({ contents, cinfo.shader_paths[i] });
 		VkPipelineShaderStageCreateInfo shader_stage{ .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
@@ -170,7 +180,7 @@ vuk::PipelineBaseInfo vuk::Context::create(const create_info_t<PipelineBaseInfo>
 	pbi.layout_info = dslai;
 	pbi.pipeline_layout = impl->pipeline_layouts.acquire(plci);
 	pbi.rasterization_state = cinfo.rasterization_state;
-	pbi.pipeline_name = std::move(pipe_name);
+	pbi.pipeline_name = Name(pipe_name);
 	pbi.reflection_info = accumulated_reflection;
 	pbi.binding_flags = cinfo.binding_flags;
 	pbi.variable_count_max = cinfo.variable_count_max;
@@ -215,7 +225,7 @@ vuk::ComputePipelineInfo vuk::Context::create(const create_info_t<vuk::ComputePi
 	cpci.layout = impl->pipeline_layouts.acquire(plci);
 	VkPipeline pipeline;
 	vkCreateComputePipelines(device, impl->vk_pipeline_cache, 1, &cpci, nullptr, &pipeline);
-	debug.set_name(pipeline, pipe_name);
+	debug.set_name(pipeline, Name(pipe_name));
 	return { { pipeline, cpci.layout, dslai }, sm.reflection_info.local_size };
 }
 
@@ -233,6 +243,10 @@ std::vector<uint8_t> vuk::Context::save_pipeline_cache() {
 	data.resize(size);
 	vkGetPipelineCacheData(device, impl->vk_pipeline_cache, &size, data.data());
 	return data;
+}
+
+vuk::Query vuk::Context::create_timestamp_query() {
+	return { impl->query_id_counter++ };
 }
 
 vuk::DescriptorSetLayoutAllocInfo vuk::Context::create(const create_info_t<vuk::DescriptorSetLayoutAllocInfo>& cinfo) {
@@ -268,31 +282,31 @@ vuk::SwapchainRef vuk::Context::add_swapchain(Swapchain sw) {
 }
 
 void vuk::Context::remove_swapchain(SwapchainRef sw) {
-    std::lock_guard _(impl->swapchains_lock);
-    for(auto it = impl->swapchains.begin(); it != impl->swapchains.end(); it++) {
+	std::lock_guard _(impl->swapchains_lock);
+	for (auto it = impl->swapchains.begin(); it != impl->swapchains.end(); it++) {
 		if (&*it == sw) {
-            impl->swapchains.erase(it);
-            return;
+			impl->swapchains.erase(it);
+			return;
 		}
 	}
 }
 
-void vuk::Context::create_named_pipeline(const char* name, vuk::PipelineBaseCreateInfo ci) {
+void vuk::Context::create_named_pipeline(vuk::Name name, vuk::PipelineBaseCreateInfo ci) {
 	std::lock_guard _(impl->named_pipelines_lock);
 	impl->named_pipelines.insert_or_assign(name, &impl->pipelinebase_cache.acquire(std::move(ci)));
 }
 
-void vuk::Context::create_named_pipeline(const char* name, vuk::ComputePipelineCreateInfo ci) {
+void vuk::Context::create_named_pipeline(vuk::Name name, vuk::ComputePipelineCreateInfo ci) {
 	std::lock_guard _(impl->named_pipelines_lock);
 	impl->named_compute_pipelines.insert_or_assign(name, &impl->compute_pipeline_cache.acquire(std::move(ci)));
 }
 
-vuk::PipelineBaseInfo* vuk::Context::get_named_pipeline(const char* name) {
+vuk::PipelineBaseInfo* vuk::Context::get_named_pipeline(vuk::Name name) {
 	std::lock_guard _(impl->named_pipelines_lock);
 	return impl->named_pipelines.at(name);
 }
 
-vuk::ComputePipelineInfo* vuk::Context::get_named_compute_pipeline(const char* name) {
+vuk::ComputePipelineInfo* vuk::Context::get_named_compute_pipeline(vuk::Name name) {
 	std::lock_guard _(impl->named_pipelines_lock);
 	return impl->named_compute_pipelines.at(name);
 }
@@ -310,9 +324,9 @@ vuk::Program vuk::Context::get_pipeline_reflection_info(vuk::PipelineBaseCreateI
 	return res.reflection_info;
 }
 
-vuk::ShaderModule vuk::Context::compile_shader(std::string source, Name path) {
+vuk::ShaderModule vuk::Context::compile_shader(ShaderSource source, std::string path) {
 	vuk::ShaderModuleCreateInfo sci;
-	sci.filename = path;
+	sci.filename = std::move(path);
 	sci.source = std::move(source);
 	auto sm = impl->shader_modules.remove(sci);
 	if (sm) {
@@ -458,7 +472,7 @@ vuk::Context::TransientSubmitStub vuk::Context::fenced_upload(std::span<UploadIt
 				acq_barrier.dstQueueFamilyIndex = dst_queue_family;
 				acq_barrier.image = upload.image.dst;
 				acq_barrier.subresourceRange = copy_barrier.subresourceRange;
-				
+
 				// no wait, no delay, sync'd by the sema
 				vkCmdPipelineBarrier(dstcbuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &acq_barrier);
 				MipGenerateCommand task;
@@ -466,7 +480,7 @@ vuk::Context::TransientSubmitStub vuk::Context::fenced_upload(std::span<UploadIt
 				task.extent = upload.image.extent;
 				task.base_array_layer = upload.image.base_array_layer;
 				task.base_mip_level = upload.image.mip_level;
-                task.layer_count = 1;
+				task.layer_count = 1;
 				task.format = upload.image.format;
 				record_mip_gen(dstcbuf, task, vuk::ImageLayout::eTransferDstOptimal);
 			}
@@ -486,12 +500,12 @@ vuk::Context::TransientSubmitStub vuk::Context::fenced_upload(std::span<UploadIt
 		// only buffers, single submit to transfer, fence waits on single cbuf
 		submit_transfer(si, fence);
 	} else {
-        vkEndCommandBuffer(dstcbuf);
+		vkEndCommandBuffer(dstcbuf);
 		// buffers and images, submit to transfer, signal sema
 		si.signalSemaphoreCount = 1;
 		auto sema = impl->get_unpooled_sema();
 		si.pSignalSemaphores = &sema;
-		submit_transfer(si, VkFence{VK_NULL_HANDLE});
+		submit_transfer(si, VkFence{ VK_NULL_HANDLE });
 		// second submit, to dst queue ideally, but for now to graphics
 		si.signalSemaphoreCount = 0;
 		si.waitSemaphoreCount = 1;
@@ -499,7 +513,7 @@ vuk::Context::TransientSubmitStub vuk::Context::fenced_upload(std::span<UploadIt
 		// mipping happens in STAGE_TRANSFER for now
 		VkPipelineStageFlags wait = VK_PIPELINE_STAGE_TRANSFER_BIT;
 		si.pWaitDstStageMask = &wait;
-        si.pCommandBuffers = &dstcbuf;
+		si.pCommandBuffers = &dstcbuf;
 		// stash semaphore
 		head_bundle->sema = sema;
 		// submit with fence
