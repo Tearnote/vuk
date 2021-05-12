@@ -3,6 +3,10 @@
 #include <functional>
 #include <span>
 
+namespace std {
+	template<class T> struct hash; // this is UB, but <functional> is heavy
+}
+
 //https://gist.github.com/filsinger/1255697/21762ea83a2d3c17561c8e6a29f44249a4626f9e
 
 namespace hash {
@@ -15,11 +19,11 @@ namespace hash {
 	};
 
 	template <> struct fnv1a_tpl<uint32_t> : public fnv_internal<uint32_t> {
-		constexpr static inline uint32_t hash(char const*const aString, const uint32_t val = default_offset_basis) {
+		constexpr static inline uint32_t hash(char const* const aString, const uint32_t val = default_offset_basis) {
 			return (aString[0] == '\0') ? val : hash(&aString[1], (val ^ uint32_t(aString[0])) * prime);
 		}
 
-		constexpr static inline uint32_t hash(char const*const aString, const size_t aStrlen, const uint32_t val) {
+		constexpr static inline uint32_t hash(char const* const aString, const size_t aStrlen, const uint32_t val) {
 			return (aStrlen == 0) ? val : hash(aString + 1, aStrlen - 1, (val ^ uint32_t(aString[0])) * prime);
 		}
 	};

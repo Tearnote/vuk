@@ -1,7 +1,7 @@
 #include "example_runner.hpp"
 #include "RenderGraphUtil.hpp"
 
-std::vector<std::string> chosen_resource;
+std::vector<vuk::Name> chosen_resource;
 
 vuk::ExampleRunner::ExampleRunner() {
 	vkb::InstanceBuilder builder;
@@ -18,7 +18,7 @@ vuk::ExampleRunner::ExampleRunner() {
 			})
 		.set_app_name("vuk_example")
 				.set_engine_name("vuk")
-				.require_api_version(1, 1, 0)
+				.require_api_version(1, 2, 0)
 				.set_app_version(0, 1, 0);
 			auto inst_ret = builder.build();
 			if (!inst_ret.has_value()) {
@@ -39,13 +39,16 @@ vuk::ExampleRunner::ExampleRunner() {
 			physical_device = vkbphysical_device.physical_device;
 
 			vkb::DeviceBuilder device_builder{ vkbphysical_device };
-			VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES };
-			descriptor_indexing_features.descriptorBindingPartiallyBound = true;
-			descriptor_indexing_features.descriptorBindingUpdateUnusedWhilePending = true;
-			descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing = true;
-			descriptor_indexing_features.runtimeDescriptorArray = true;
-			descriptor_indexing_features.descriptorBindingVariableDescriptorCount = true;
-			auto dev_ret = device_builder.add_pNext(&descriptor_indexing_features).build();
+			VkPhysicalDeviceVulkan12Features vk12features{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+			vk12features.descriptorBindingPartiallyBound = true;
+			vk12features.descriptorBindingUpdateUnusedWhilePending = true;
+			vk12features.shaderSampledImageArrayNonUniformIndexing = true;
+			vk12features.runtimeDescriptorArray = true;
+			vk12features.descriptorBindingVariableDescriptorCount = true;
+			vk12features.hostQueryReset = true;
+			VkPhysicalDeviceVulkan11Features vk11features{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+			vk11features.shaderDrawParameters = true;
+			auto dev_ret = device_builder.add_pNext(&vk12features).add_pNext(&vk11features).build();
 			if (!dev_ret.has_value()) {
 				// error
 			}
@@ -96,14 +99,14 @@ void vuk::ExampleRunner::render() {
 			auto rg = item_current->render(*this, ifc);
 			ImGui::Render();
 			auto ptc = ifc.begin();
-			std::string attachment_name = std::string(item_current->name) + "_final";
+			vuk::Name attachment_name = vuk::Name(std::string(item_current->name) + "_final");
 			util::ImGui_ImplVuk_Render(ptc, rg, attachment_name, "SWAPCHAIN", imgui_data, ImGui::GetDrawData());
 			rg.attach_swapchain(attachment_name, swapchain, vuk::ClearColor{ 0.3f, 0.5f, 0.3f, 1.0f });
 			execute_submit_and_present_to_one(ptc, std::move(rg).link(ptc), swapchain);
 		} else { // render all examples as imgui windows
 			RenderGraph rg;
 			auto ptc = ifc.begin();
-			plf::colony<std::string> attachment_names;
+			plf::colony<vuk::Name> attachment_names;
 
 			size_t i = 0;
 			for (auto& ex : examples) {
@@ -119,9 +122,8 @@ void vuk::ExampleRunner::render() {
 						auto bound_it = bound_attachments.find(key);
 						if (bound_it == bound_attachments.end())
 							continue;
-						auto usage = rg_frag.compute_usage(use_refs);
 						auto samples = vuk::SampleCountFlagBits::e1;
-						if (!(*bound_it).second.samples.infer)
+						if ((*bound_it).second.samples != vuk::Samples::eInfer)
 							samples = (*bound_it).second.samples.count;
 						disable = disable || (samples != vuk::SampleCountFlagBits::e1);
 					}
@@ -131,14 +133,12 @@ void vuk::ExampleRunner::render() {
 						if (bound_it == bound_attachments.end())
 							continue;
 						std::string btn_id = "";
-						bool storage = false;
 						bool prevent_disable = false;
-						if (key == attachment_name) {
+						if (key.to_sv() == attachment_name) {
 							prevent_disable = true;
 							btn_id = "F";
 						} else {
 							auto usage = rg_frag.compute_usage(use_refs);
-							auto samples = vuk::SampleCountFlagBits::e1;
 							if (usage & vuk::ImageUsageFlagBits::eColorAttachment) {
 								btn_id += "C";
 							} else if (usage & vuk::ImageUsageFlagBits::eDepthStencilAttachment) {
@@ -150,24 +150,24 @@ void vuk::ExampleRunner::render() {
 						if (disable && !prevent_disable) {
 							btn_id += " (MS)";
 						} else {
-							btn_id += "##" + std::string(key);
+							btn_id += "##" + std::string(key.to_sv());
 						}
 						if (disable && !prevent_disable) {
 							ImGui::TextDisabled("%s", btn_id.c_str());
 						} else {
 							if (ImGui::Button(btn_id.c_str())) {
-								chosen_resource[i] = key;
+								chosen_resource[i] = key.to_sv();
 							}
 						}
 						if (ImGui::IsItemHovered())
-							ImGui::SetTooltip("%s", key.data());
+							ImGui::SetTooltip("%s", key.c_str());
 						ImGui::SameLine();
 					}
 					ImGui::NewLine();
 				}
 				rg.append(std::move(rg_frag));
 
-				if (chosen_resource[i].empty())
+				if (chosen_resource[i].is_invalid())
 					chosen_resource[i] = attachment_name;
 				ImGui::Image(&ptc.make_sampled_image(chosen_resource[i], imgui_data.font_sci), ImVec2(200, 200));
 				ImGui::End();

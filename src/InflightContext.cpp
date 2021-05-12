@@ -5,8 +5,20 @@
 vuk::InflightContext::InflightContext(Context& ctx, size_t absolute_frame, std::lock_guard<std::mutex>&& recycle_guard) :
 	ctx(ctx),
 	absolute_frame(absolute_frame),
-	frame(absolute_frame% Context::FC),
-	impl(new IFCImpl(ctx, *this)){
+	frame(absolute_frame% Context::FC) {
+
+	// extract query results before resetting
+	std::unordered_map<uint64_t, uint64_t> query_results;
+	for (auto& p : ctx.impl->tsquery_pools.per_frame_storage[frame]) {
+		p.get_results(ctx);
+		for (auto& [src, dst] : p.id_to_value_mapping) {
+			query_results[src] = p.host_values[dst];
+		}
+	}
+
+	impl = new IFCImpl(ctx, *this);
+
+	impl->query_result_map = std::move(query_results);
 
 	// image recycling
 	for (auto& img : ctx.impl->image_recycle[frame]) {
@@ -52,6 +64,25 @@ vuk::PerThreadContext vuk::InflightContext::begin() {
 	return PerThreadContext{ *this, ctx.get_thread_index ? ctx.get_thread_index() : 0 };
 }
 
+std::optional<uint64_t> vuk::InflightContext::get_timestamp_query_result(vuk::Query q) {
+	auto it = impl->query_result_map.find(q.id);
+	if (it != impl->query_result_map.end()) {
+		return it->second;
+	}
+	return {};
+}
+
+std::optional<double> vuk::InflightContext::get_duration_query_result(vuk::Query q1, vuk::Query q2) {
+	auto r1 = get_timestamp_query_result(q1);
+	auto r2 = get_timestamp_query_result(q2);
+	if (!r1 || !r2) {
+		return {};
+	}
+	double period = ctx.impl->physical_device_properties.limits.timestampPeriod;
+	auto ns = period * (r2.value() - r1.value());
+	return ns * 1e-9;
+}
+
 vuk::TransferStub vuk::InflightContext::enqueue_transfer(Buffer src, Buffer dst) {
 	std::lock_guard _(impl->transfer_mutex);
 	TransferStub stub{ transfer_id++ };
@@ -89,9 +120,9 @@ void vuk::InflightContext::destroy(std::vector<VkImageView>&& images) {
 }
 
 std::vector<vuk::SampledImage> vuk::InflightContext::get_sampled_images() {
-    std::vector<vuk::SampledImage> sis;
+	std::vector<vuk::SampledImage> sis;
 	for (auto& p : impl->sampled_images.frame_values) {
-        sis.insert(sis.end(), p.values.begin(), p.values.end());
+		sis.insert(sis.end(), p.values.begin(), p.values.end());
 	}
-    return sis;
+	return sis;
 }

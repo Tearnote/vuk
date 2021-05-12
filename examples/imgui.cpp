@@ -20,24 +20,21 @@ util::ImGuiData util::ImGui_ImplVuk_Init(vuk::PerThreadContext& ptc) {
 	sci.minFilter = sci.magFilter = vuk::Filter::eLinear;
 	sci.mipmapMode = vuk::SamplerMipmapMode::eLinear;
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = vuk::SamplerAddressMode::eRepeat;
-	sci.minLod = -1000;
-	sci.maxLod = 1000;
-	sci.maxAnisotropy = 1.0f;
 	data.font_sci = sci;
 	data.font_si = std::make_unique<vuk::SampledImage>(vuk::SampledImage::Global{ *data.font_texture.view, sci, vuk::ImageLayout::eShaderReadOnlyOptimal });
 	io.Fonts->TexID = (ImTextureID)data.font_si.get();
 	{
 		vuk::PipelineBaseCreateInfo pci;
-		auto vpath = "../../imgui.vert";
-		auto vcont = util::read_entire_file(vpath);
-		pci.add_shader(vcont, vpath);
-		auto fpath = "../../imgui.frag";
-		auto fcont = util::read_entire_file(fpath);
-		pci.add_shader(fcont, fpath);
+		auto vpath = "../../examples/imgui.vert.spv";
+		auto vcont = util::read_spirv(vpath);
+		pci.add_spirv(vcont, vpath);
+		auto fpath = "../../examples/imgui.frag.spv";
+		auto fcont = util::read_spirv(fpath);
+		pci.add_spirv(fcont, fpath);
 		pci.set_blend(vuk::BlendPreset::eAlphaBlend);
 		ptc.ctx.create_named_pipeline("imgui", pci);
 	}
-
+	ptc.wait_all_transfers();
 	return data;
 }
 
@@ -63,8 +60,8 @@ void util::ImGui_ImplVuk_Render(vuk::PerThreadContext& ptc, vuk::RenderGraph& rg
 
 	size_t vertex_size = draw_data->TotalVtxCount * sizeof(ImDrawVert);
 	size_t index_size = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
-	auto imvert = ptc._allocate_scratch_buffer(vuk::MemoryUsage::eGPUonly, vuk::BufferUsageFlagBits::eVertexBuffer | vuk::BufferUsageFlagBits::eTransferDst, vertex_size, 1, false);
-	auto imind = ptc._allocate_scratch_buffer(vuk::MemoryUsage::eGPUonly, vuk::BufferUsageFlagBits::eIndexBuffer | vuk::BufferUsageFlagBits::eTransferDst, index_size, 1, false);
+	auto imvert = ptc.allocate_scratch_buffer(vuk::MemoryUsage::eGPUonly, vuk::BufferUsageFlagBits::eVertexBuffer | vuk::BufferUsageFlagBits::eTransferDst, vertex_size, 1);
+	auto imind = ptc.allocate_scratch_buffer(vuk::MemoryUsage::eGPUonly, vuk::BufferUsageFlagBits::eIndexBuffer | vuk::BufferUsageFlagBits::eTransferDst, index_size, 1);
 
 	size_t vtx_dst = 0, idx_dst = 0;
 	for (int n = 0; n < draw_data->CmdListsCount; n++) {

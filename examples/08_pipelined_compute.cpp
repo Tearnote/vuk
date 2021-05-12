@@ -32,15 +32,15 @@ namespace {
 		.setup = [](vuk::ExampleRunner& runner, vuk::InflightContext& ifc) {
 			{
 			vuk::PipelineBaseCreateInfo pci;
-			pci.add_shader(util::read_entire_file("../../examples/fullscreen.vert"), "fullscreen.vert");
-			pci.add_shader(util::read_entire_file("../../examples/rtt.frag"), "rtt.frag");
+			pci.add_glsl(util::read_entire_file("../../examples/fullscreen.vert"), "fullscreen.vert");
+			pci.add_glsl(util::read_entire_file("../../examples/rtt.frag"), "rtt.frag");
 			runner.context->create_named_pipeline("rtt", pci);
 			}
 
 			{
 			vuk::PipelineBaseCreateInfo pci;
-			pci.add_shader(util::read_entire_file("../../examples/fullscreen.vert"), "fullscreen.vert");
-			pci.add_shader(util::read_entire_file("../../examples/scrambled_draw.frag"), "scrambled_draw.frag");
+			pci.add_glsl(util::read_entire_file("../../examples/fullscreen.vert"), "fullscreen.vert");
+			pci.add_glsl(util::read_entire_file("../../examples/scrambled_draw.frag"), "scrambled_draw.frag");
 			runner.context->create_named_pipeline("scrambled_draw", pci);
 			}
 
@@ -48,7 +48,7 @@ namespace {
 			// but here we can compile immediately
 			{
 			vuk::ComputePipelineCreateInfo pci;
-			pci.add_shader(util::read_entire_file("../../examples/stupidsort.comp"), "stupidsort.comp");
+			pci.add_glsl(util::read_entire_file("../../examples/stupidsort.comp"), "stupidsort.comp");
 			runner.context->create_named_pipeline("stupidsort", pci);
 			}
 
@@ -60,7 +60,7 @@ namespace {
 			texture_of_doge = std::move(tex);
 	
 			// init scrambling buffer
-			scramble_buf = ptc._allocate_buffer(vuk::MemoryUsage::eGPUonly, vuk::BufferUsageFlagBits::eTransferDst | vuk::BufferUsageFlagBits::eStorageBuffer, sizeof(unsigned) * x * y, 1, false);
+			scramble_buf = ptc.allocate_buffer(vuk::MemoryUsage::eGPUonly, vuk::BufferUsageFlagBits::eTransferDst | vuk::BufferUsageFlagBits::eStorageBuffer, sizeof(unsigned) * x * y, 1);
 			std::vector<unsigned> indices(x * y);
 			std::iota(indices.begin(), indices.end(), 0);
 			std::shuffle(indices.begin(), indices.end(), g);

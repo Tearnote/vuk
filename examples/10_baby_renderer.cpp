@@ -100,7 +100,7 @@ namespace {
 			// Creating a compute pipeline that inverts an image 
 			{
 				vuk::ComputePipelineCreateInfo pci;
-				pci.add_shader(util::read_entire_file("../../examples/invert.comp"), "invert.comp");
+				pci.add_glsl(util::read_entire_file("../../examples/invert.comp"), "invert.comp");
 				runner.context->create_named_pipeline("invert", pci);
 			}
 			vuk::ImageCreateInfo ici;
@@ -120,7 +120,7 @@ namespace {
 			vuk::RenderGraph rg;
 			rg.add_pass({
 						.name = "10_preprocess",
-						.resources = {"10_doge"_image(vuk::eMemoryRead), "10_v1"_image(vuk::eTransferDst), "10_v2"_image(vuk::eComputeRead)},
+						.resources = {"10_doge"_image(vuk::eMemoryRead), "10_v1"_image(vuk::eTransferDst), "10_v2"_image(vuk::eComputeWrite)},
 						.execute = [x, y](vuk::CommandBuffer& command_buffer) {
 					// For the first image, flip the image on the Y axis using a blit
 					vuk::ImageBlit blit;
@@ -170,8 +170,8 @@ namespace {
 			vuk::PipelineBaseInfo* pipe1;
 			{
 				vuk::PipelineBaseCreateInfo pci;
-				pci.add_shader(util::read_entire_file("../../examples/baby_renderer.vert"), "baby_renderer.vert");
-				pci.add_shader(util::read_entire_file("../../examples/triangle_depthshaded_tex.frag"), "triangle_depthshaded_tex.frag");
+				pci.add_glsl(util::read_entire_file("../../examples/baby_renderer.vert"), "baby_renderer.vert");
+				pci.add_glsl(util::read_entire_file("../../examples/triangle_depthshaded_tex.frag"), "triangle_depthshaded_tex.frag");
 				pipe1 = runner.context->get_pipeline(pci);
 			}
 
@@ -179,8 +179,8 @@ namespace {
 			vuk::PipelineBaseInfo* pipe2;
 			{
 				vuk::PipelineBaseCreateInfo pci;
-				pci.add_shader(util::read_entire_file("../../examples/baby_renderer.vert"), "baby_renderer.vert");
-				pci.add_shader(util::read_entire_file("../../examples/triangle_tinted_tex.frag"), "triangle_tinted_tex.frag");
+				pci.add_glsl(util::read_entire_file("../../examples/baby_renderer.vert"), "baby_renderer.vert");
+				pci.add_glsl(util::read_entire_file("../../examples/triangle_tinted_tex.frag"), "triangle_tinted_tex.frag");
 				pipe2 = runner.context->get_pipeline(pci);
 			}
 
@@ -255,7 +255,7 @@ namespace {
 			}
 
 			// Upload model matrices to an array
-			auto modelmats = ptc._allocate_scratch_buffer(vuk::MemoryUsage::eCPUtoGPU, vuk::BufferUsageFlagBits::eStorageBuffer, sizeof(glm::mat4) * renderables.size(), 1, true);
+			auto modelmats = ptc.allocate_scratch_buffer(vuk::MemoryUsage::eCPUtoGPU, vuk::BufferUsageFlagBits::eStorageBuffer, sizeof(glm::mat4) * renderables.size(), 1);
 			for (auto i = 0; i < renderables.size(); i++) {
 				glm::mat4 model_matrix = glm::translate(glm::mat4(1.f), renderables[i].position);
 				memcpy(reinterpret_cast<glm::mat4*>(modelmats.mapped_ptr) + i, &model_matrix, sizeof(glm::mat4));

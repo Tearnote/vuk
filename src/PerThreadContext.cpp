@@ -86,14 +86,15 @@ size_t vuk::PerThreadContext::get_allocation_size(Buffer buf) {
 	return ctx.impl->allocator.get_allocation_size(buf);
 }
 
-vuk::Buffer vuk::PerThreadContext::_allocate_scratch_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment,
-	bool create_mapped) {
+vuk::Buffer vuk::PerThreadContext::allocate_scratch_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment) {
+	bool create_mapped = mem_usage == MemoryUsage::eCPUonly || mem_usage == MemoryUsage::eCPUtoGPU || mem_usage == MemoryUsage::eGPUtoCPU;
 	PoolSelect ps{ mem_usage, buffer_usage };
 	auto& pool = impl->scratch_buffers.acquire(ps);
 	return ifc.ctx.impl->allocator.allocate_buffer(pool, size, alignment, create_mapped);
 }
 
-vuk::Unique<vuk::Buffer> vuk::PerThreadContext::_allocate_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment, bool create_mapped) {
+vuk::Unique<vuk::Buffer> vuk::PerThreadContext::allocate_buffer(MemoryUsage mem_usage, vuk::BufferUsageFlags buffer_usage, size_t size, size_t alignment) {
+	bool create_mapped = mem_usage == MemoryUsage::eCPUonly || mem_usage == MemoryUsage::eCPUtoGPU || mem_usage == MemoryUsage::eGPUtoCPU;
 	return vuk::Unique<Buffer>(ifc.ctx, ifc.ctx.impl->allocator.allocate_buffer(mem_usage, buffer_usage, size, alignment, create_mapped));
 }
 
@@ -119,7 +120,7 @@ vuk::Unique<vuk::ImageView> vuk::PerThreadContext::create_image_view(vuk::ImageV
 	return vuk::Unique<vuk::ImageView>(ctx, ctx.wrap(iv));
 }
 
-std::pair<vuk::Texture, vuk::TransferStub> vuk::PerThreadContext::create_texture(vuk::Format format, vuk::Extent3D extent, void* data) {
+std::pair<vuk::Texture, vuk::TransferStub> vuk::PerThreadContext::create_texture(vuk::Format format, vuk::Extent3D extent, void* data, bool generate_mips) {
 	vuk::ImageCreateInfo ici;
 	ici.format = format;
 	ici.extent = extent;
@@ -128,9 +129,10 @@ std::pair<vuk::Texture, vuk::TransferStub> vuk::PerThreadContext::create_texture
 	ici.initialLayout = vuk::ImageLayout::eUndefined;
 	ici.tiling = vuk::ImageTiling::eOptimal;
 	ici.usage = vuk::ImageUsageFlagBits::eTransferSrc | vuk::ImageUsageFlagBits::eTransferDst | vuk::ImageUsageFlagBits::eSampled;
-	ici.mipLevels = ici.arrayLayers = 1;
+	ici.mipLevels = generate_mips ? (uint32_t)log2f((float)std::max(extent.width, extent.height)) + 1 : 1;
+	ici.arrayLayers = 1;
 	auto tex = ctx.allocate_texture(ici);
-	auto stub = upload(*tex.image, format, extent, 0, std::span<std::byte>((std::byte*)data, compute_image_size(format, extent)), false);
+	auto stub = upload(*tex.image, format, extent, 0, std::span<std::byte>((std::byte*)data, compute_image_size(format, extent)), generate_mips);
 	return { std::move(tex), stub };
 }
 
@@ -192,11 +194,15 @@ vuk::DescriptorSet vuk::PerThreadContext::create(const create_info_t<vuk::Descri
 	auto ds = pool.acquire(*this, cinfo.layout_info);
 	auto mask = cinfo.used.to_ulong();
 	unsigned long leading_ones = num_leading_ones(mask);
-	std::array<VkWriteDescriptorSet, VUK_MAX_BINDINGS> writes;
-	for (unsigned i = 0; i < leading_ones; i++) {
-		if (!cinfo.used.test(i)) continue;
-		auto& write = writes[i];
-		write = { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+    std::array<VkWriteDescriptorSet, VUK_MAX_BINDINGS> writes = {};
+    int j = 0;
+	for (int i = 0; i < leading_ones; i++, j++) {
+        if(!cinfo.used.test(i)) {
+            j--;
+            continue;
+        }
+        auto& write = writes[j];
+        write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
 		auto& binding = cinfo.bindings[i];
 		write.descriptorType = (VkDescriptorType)binding.type;
 		write.dstArrayElement = 0;
@@ -218,7 +224,7 @@ vuk::DescriptorSet vuk::PerThreadContext::create(const create_info_t<vuk::Descri
 			assert(0);
 		}
 	}
-	vkUpdateDescriptorSets(ctx.device, leading_ones, writes.data(), 0, nullptr);
+	vkUpdateDescriptorSets(ctx.device, j, writes.data(), 0, nullptr);
 	return { ds, cinfo.layout_info };
 }
 
@@ -231,15 +237,15 @@ vuk::RGImage vuk::PerThreadContext::create(const create_info_t<vuk::RGImage>& ci
 	res.image = ctx.impl->allocator.create_image_for_rendertarget(cinfo.ici);
 	auto ivci = cinfo.ivci;
 	ivci.image = res.image;
-	std::string name = std::string("Image: RenderTarget ") + std::string(cinfo.name);
-	ctx.debug.set_name(res.image, name);
-	name = std::string("ImageView: RenderTarget ") + std::string(cinfo.name);
+	std::string name = std::string("Image: RenderTarget ") + std::string(cinfo.name.to_sv());
+	ctx.debug.set_name(res.image, Name(name));
+	name = std::string("ImageView: RenderTarget ") + std::string(cinfo.name.to_sv());
 	// skip creating image views for images that can't be viewed
 	if (cinfo.ici.usage & (vuk::ImageUsageFlagBits::eColorAttachment | vuk::ImageUsageFlagBits::eDepthStencilAttachment | vuk::ImageUsageFlagBits::eInputAttachment | vuk::ImageUsageFlagBits::eSampled | vuk::ImageUsageFlagBits::eStorage)) {
 		VkImageView iv;
 		vkCreateImageView(ctx.device, (VkImageViewCreateInfo*)&ivci, nullptr, &iv);
 		res.image_view = ctx.wrap(iv);
-		ctx.debug.set_name(res.image_view.payload, name);
+		ctx.debug.set_name(res.image_view.payload, Name(name));
 	}
 	return res;
 }
@@ -302,6 +308,13 @@ vuk::DescriptorPool vuk::PerThreadContext::create(const create_info_t<vuk::Descr
 vuk::Program vuk::PerThreadContext::get_pipeline_reflection_info(vuk::PipelineBaseCreateInfo pci) {
 	auto& res = impl->pipelinebase_cache.acquire(pci);
 	return res.reflection_info;
+}
+
+vuk::TimestampQuery vuk::PerThreadContext::register_timestamp_query(vuk::Query handle) {
+	auto query_slot = impl->tsquery_pool.acquire(1)[0];
+	auto& mapping = impl->tsquery_pool.pool.id_to_value_mapping;
+	mapping.emplace_back(handle.id, query_slot.id);
+	return query_slot;
 }
 
 VkFence vuk::PerThreadContext::acquire_fence() {

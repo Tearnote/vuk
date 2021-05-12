@@ -2,15 +2,13 @@
 
 #include <utility>
 #include <optional>
-#include "Allocator.hpp"
-#include "FixedVector.hpp"
-#include "Types.hpp"
-#include "Buffer.hpp"
-#include "Image.hpp"
-
-#define VUK_MAX_SETS 8
-#define VUK_MAX_ATTRIBUTES 8
-#define VUK_MAX_PUSHCONSTANT_RANGES 8
+#include <vuk/Config.hpp>
+#include <Allocator.hpp>
+#include <vuk/FixedVector.hpp>
+#include <vuk/Types.hpp>
+#include <vuk/Types.hpp>
+#include <vuk/Image.hpp>
+#include <vuk/Query.hpp>
 
 namespace vuk {
 	class Context;
@@ -164,6 +162,7 @@ namespace vuk {
 
 	struct ExecutableRenderGraph;
 	struct PassInfo;
+	struct Query;
 
 	class CommandBuffer {
 	protected:
@@ -185,10 +184,14 @@ namespace vuk {
 		vuk::fixed_vector<vuk::VertexInputAttributeDescription, VUK_MAX_ATTRIBUTES> attribute_descriptions;
 		vuk::fixed_vector<VkVertexInputBindingDescription, VUK_MAX_ATTRIBUTES> binding_descriptions;
 		vuk::fixed_vector<VkPushConstantRange, VUK_MAX_PUSHCONSTANT_RANGES> pcrs;
+
 		std::array<unsigned char, 128> push_constant_buffer;
-		
+
+		vuk::fixed_vector<std::pair<VkSpecializationMapEntry, VkShaderStageFlags>, VUK_MAX_SPECIALIZATIONCONSTANT_RANGES> smes;
+		std::array<unsigned char, 64> specialization_constant_buffer;
+
 		std::optional<vuk::PipelineColorBlendAttachmentState> blend_state_override;
-        std::optional<std::array<float, 4>> blend_constants;
+		std::optional<std::array<float, 4>> blend_constants;
 
 		vuk::PipelineBaseInfo* next_pipeline = nullptr;
 		vuk::ComputePipelineInfo* next_compute_pipeline = nullptr;
@@ -222,7 +225,7 @@ namespace vuk {
 		CommandBuffer& set_scissor(unsigned index, Rect2D vp);
 
 		CommandBuffer& set_blend_state(vuk::PipelineColorBlendAttachmentState);
-        CommandBuffer& set_blend_constants(std::array<float, 4> constants);
+		CommandBuffer& set_blend_constants(std::array<float, 4> constants);
 
 		CommandBuffer& bind_graphics_pipeline(vuk::PipelineBaseInfo*);
 		CommandBuffer& bind_graphics_pipeline(Name);
@@ -248,6 +251,12 @@ namespace vuk {
 		template<class T>
 		CommandBuffer& push_constants(vuk::ShaderStageFlags stages, size_t offset, T value);
 
+		CommandBuffer& specialization_constants(unsigned constant_id, vuk::ShaderStageFlags stages, size_t offset, void* data, size_t size);
+		template<class T>
+		CommandBuffer& specialization_constants(unsigned constant_id, vuk::ShaderStageFlags stages, size_t offset, std::span<T> span);
+		template<class T>
+		CommandBuffer& specialization_constants(unsigned constant_id, vuk::ShaderStageFlags stages, size_t offset, T value);
+
 		CommandBuffer& bind_uniform_buffer(unsigned set, unsigned binding, Buffer buffer);
 		CommandBuffer& bind_storage_buffer(unsigned set, unsigned binding, Buffer buffer);
 
@@ -261,7 +270,7 @@ namespace vuk {
 
 		CommandBuffer& draw(size_t vertex_count, size_t instance_count, size_t first_vertex, size_t first_instance);
 		CommandBuffer& draw_indexed(size_t index_count, size_t instance_count, size_t first_index, int32_t vertex_offset, size_t first_instance);
-		
+
 		CommandBuffer& draw_indexed_indirect(size_t command_count, Buffer indirect_buffer);
 		CommandBuffer& draw_indexed_indirect(std::span<vuk::DrawIndexedIndirectCommand>);
 
@@ -280,8 +289,13 @@ namespace vuk {
 		void resolve_image(Name src, Name dst);
 		void blit_image(Name src, Name dst, vuk::ImageBlit region, vuk::Filter filter);
 		void copy_image_to_buffer(Name src, Name dst, vuk::BufferImageCopy);
+
 		// explicit synchronisation
 		void image_barrier(Name, vuk::Access src_access, vuk::Access dst_access);
+
+		// queries
+		void write_timestamp(Query, vuk::PipelineStageFlagBits stage = vuk::PipelineStageFlagBits::eBottomOfPipe);
+
 	protected:
 		void _bind_state(bool graphics);
 		void _bind_compute_pipeline_state();
@@ -300,13 +314,39 @@ namespace vuk {
 	inline CommandBuffer& CommandBuffer::push_constants(vuk::ShaderStageFlags stages, size_t offset, std::span<T> span) {
 		return push_constants(stages, offset, (void*)span.data(), sizeof(T) * span.size());
 	}
+
 	template<class T>
 	inline CommandBuffer& CommandBuffer::push_constants(vuk::ShaderStageFlags stages, size_t offset, T value) {
 		return push_constants(stages, offset, (void*)&value, sizeof(T));
 	}
+
+	template<class T>
+	inline CommandBuffer& CommandBuffer::specialization_constants(unsigned constant_id, vuk::ShaderStageFlags stages, size_t offset, std::span<T> span) {
+		return specialization_constants(constant_id, stages, offset, (void*)span.data(), sizeof(T) * span.size());
+	}
+
+	template<class T>
+	inline CommandBuffer& CommandBuffer::specialization_constants(unsigned constant_id, vuk::ShaderStageFlags stages, size_t offset, T value) {
+		return specialization_constants(constant_id, stages, offset, (void*)&value, sizeof(T));
+	}
+
 	template<class T>
 	inline T* CommandBuffer::map_scratch_uniform_binding(unsigned set, unsigned binding) {
 		return static_cast<T*>(_map_scratch_uniform_binding(set, binding, sizeof(T)));
 	}
+
+	struct TimedScope {
+		TimedScope(CommandBuffer& cbuf, Query a, Query b) : cbuf(cbuf), a(a), b(b) {
+			cbuf.write_timestamp(a, vuk::PipelineStageFlagBits::eBottomOfPipe);
+		}
+
+		~TimedScope() {
+			cbuf.write_timestamp(b, vuk::PipelineStageFlagBits::eBottomOfPipe);
+		}
+
+		CommandBuffer& cbuf;
+		Query a;
+		Query b;
+	};
 }
 

@@ -46,15 +46,15 @@ namespace vuk {
 			for (auto& res : pif.pass.resources) {
 				if (is_read_access(res.ia)) {
 					pif.inputs.emplace_back(res);
-                    auto resolved_name = resolve_name(res.name, impl->aliases);
-                    auto hashed_resolved_name = ::hash::fnv1a::hash(resolved_name.data(), resolved_name.size(), hash::fnv1a::default_offset_basis);
-                    pif.resolved_input_name_hashes.emplace_back(hashed_resolved_name);
-                    pif.bloom_resolved_inputs |= hashed_resolved_name;
+					auto resolved_name = resolve_name(res.name, impl->aliases);
+					auto hashed_resolved_name = ::hash::fnv1a::hash(resolved_name.to_sv().data(), resolved_name.to_sv().size(), hash::fnv1a::default_offset_basis);
+					pif.resolved_input_name_hashes.emplace_back(hashed_resolved_name);
+					pif.bloom_resolved_inputs |= hashed_resolved_name;
 				}
 				if (is_write_access(res.ia)) {
-                    auto hashed_name = ::hash::fnv1a::hash(res.name.data(), res.name.size(), hash::fnv1a::default_offset_basis);
-                    pif.bloom_outputs |= hashed_name;
-                    pif.output_name_hashes.emplace_back(hashed_name);
+					auto hashed_name = ::hash::fnv1a::hash(res.name.to_sv().data(), res.name.to_sv().size(), hash::fnv1a::default_offset_basis);
+					pif.bloom_outputs |= hashed_name;
+					pif.output_name_hashes.emplace_back(hashed_name);
 					pif.outputs.emplace_back(res);
 				}
 			}
@@ -67,31 +67,31 @@ namespace vuk {
 
 		// sort passes
 		if (impl->passes.size() > 1) {
-			topological_sort(impl->passes.begin(), impl->passes.end(), [this](const auto& p1, const auto& p2) {
+			topological_sort(impl->passes.begin(), impl->passes.end(), [](const auto& p1, const auto& p2) {
 				bool could_execute_after = false;
 				bool could_execute_before = false;
 
-                if((p1.bloom_outputs & p2.bloom_resolved_inputs) != 0) {
-                    for(auto& o: p1.output_name_hashes) {
-                        for(auto& i: p2.resolved_input_name_hashes) {
-                            if(o == i) {
-                                could_execute_after = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-				if((p2.bloom_outputs & p1.bloom_resolved_inputs) != 0) {
-                    for(auto& o: p2.output_name_hashes) {
-                        for(auto& i: p1.resolved_input_name_hashes) {
-                            if(o == i) {
-                                could_execute_before = true;
-                                break;
-                            }
-                        }
-                    }
-                }
+				if ((p1.bloom_outputs & p2.bloom_resolved_inputs) != 0) {
+					for (auto& o : p1.output_name_hashes) {
+						for (auto& i : p2.resolved_input_name_hashes) {
+							if (o == i) {
+								could_execute_after = true;
+								break;
+							}
+						}
+					}
+				}
+
+				if ((p2.bloom_outputs & p1.bloom_resolved_inputs) != 0) {
+					for (auto& o : p2.output_name_hashes) {
+						for (auto& i : p1.resolved_input_name_hashes) {
+							if (o == i) {
+								could_execute_before = true;
+								break;
+							}
+						}
+					}
+				}
 				if (!could_execute_after && !could_execute_before && p1.outputs == p2.outputs) {
 					return p1.pass.auxiliary_order < p2.pass.auxiliary_order;
 				}
@@ -288,7 +288,7 @@ namespace vuk {
 		// check if all resourced are attached
 		for (const auto& [n, v] : impl->use_chains) {
 			if (!impl->bound_attachments.contains(n) && !impl->bound_buffers.contains(n)) {
-				throw RenderGraphException{ std::string("Missing resource: \"") + std::string(n) + "\". Did you forget to attach it?" };
+				throw RenderGraphException{ std::string("Missing resource: \"") + std::string(n.to_sv()) + "\". Did you forget to attach it?" };
 			}
 		}
 	}
@@ -370,10 +370,10 @@ namespace vuk {
 							barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
 							ImageBarrier ib{ .image = name, .barrier = barrier, .src = left.use.stages, .dst = right.use.stages };
 							// attach this barrier to the end of subpass or end of renderpass
-                            if(left_rp.framebufferless) {
-                                left_rp.subpasses[left.pass->subpass].post_barriers.push_back(ib);
-                            } else {
-                                left_rp.post_barriers.push_back(ib);
+							if (left_rp.framebufferless) {
+								left_rp.subpasses[left.pass->subpass].post_barriers.push_back(ib);
+							} else {
+								left_rp.post_barriers.push_back(ib);
 							}
 						}
 					}
@@ -534,9 +534,12 @@ namespace vuk {
 			rp.rpci.ds_refs.resize(rp.subpasses.size());
 		}
 
-		// we now have enough data to build vk::RenderPasses and vk::Framebuffers
+		// we now have enough data to build VkRenderPasses and VkFramebuffers
+		
+		// compile attachments
 		// we have to assign the proper attachments to proper slots
 		// the order is given by the resource binding order
+
 		size_t previous_rp = -1;
 		uint32_t previous_sp = -1;
 		for (auto& pass : impl->passes) {
@@ -574,7 +577,6 @@ namespace vuk {
 						ds_attrefs[subpass_index] = attref;
 					}
 				} else {
-
 					VkAttachmentReference rref{};
 					rref.attachment = VK_ATTACHMENT_UNUSED;
 					if (auto it = pass.pass.resolves.find(res.name); it != pass.pass.resolves.end()) {
@@ -583,6 +585,8 @@ namespace vuk {
 						auto& dst_name = it->second;
 						rref.layout = (VkImageLayout)vuk::ImageLayout::eColorAttachmentOptimal; // the only possible layout for resolves
 						rref.attachment = (uint32_t)std::distance(rp.attachments.begin(), std::find_if(rp.attachments.begin(), rp.attachments.end(), [&](auto& att) { return dst_name == att.name; }));
+						rp.attachments[rref.attachment].samples = vuk::Samples::e1; // resolve dst must be sample count = 1
+						rp.attachments[rref.attachment].is_resolve_dst = true;
 					}
 
 					// we insert the new attachment at the end of the list for current subpass index
@@ -600,6 +604,8 @@ namespace vuk {
 				}
 			}
 		}
+
+		// compile subpass description structures
 
 		for (auto& rp : impl->rpis) {
 			if (rp.attachments.size() == 0) {
@@ -647,20 +653,70 @@ namespace vuk {
 
 			rp.rpci.dependencyCount = (uint32_t)rp.rpci.subpass_dependencies.size();
 			rp.rpci.pDependencies = rp.rpci.subpass_dependencies.data();
+		}
 
-			// attachments
-			vuk::Samples samples(vuk::SampleCountFlagBits::e1);
-			for (auto& attrpinfo : rp.attachments) {
-				auto& bound = impl->bound_attachments.at(attrpinfo.name);
-				if (!bound.samples.infer) {
-					samples = bound.samples;
+		// perform sample count inference for framebuffers
+		// loop through all renderpasses, and attempt to infer any sample count we can
+		// then loop again, stopping if we have inferred all or have not made progress
+		// resolve images are always sample count 1 and are excluded from the inference
+
+		bool infer_progress = false;
+		bool any_fb_incomplete = false;
+		do {
+			any_fb_incomplete = false;
+			infer_progress = false;
+			for (auto& rp : impl->rpis) {
+				if (rp.attachments.size() == 0) {
+					continue;
+				}
+
+				vuk::Samples fb_samples = rp.fbci.sample_count;
+				bool samples_known = fb_samples != vuk::Samples::eInfer;
+
+				if (samples_known) {
+					continue;
+				}
+
+				// see if any attachment has a set sample count
+				for (auto& attrpinfo : rp.attachments) {
+					auto& bound = impl->bound_attachments[attrpinfo.name];
+
+					if (bound.samples != vuk::Samples::eInfer && !attrpinfo.is_resolve_dst) {
+						fb_samples = bound.samples;
+						samples_known = true;
+						break;
+					}
+				}
+
+				// propagate known sample count onto attachments
+				if (samples_known) {
+					for (auto& attrpinfo : rp.attachments) {
+						auto& bound = impl->bound_attachments[attrpinfo.name];
+						if (!attrpinfo.is_resolve_dst) {
+							bound.samples = fb_samples;
+						}
+					}
+					rp.fbci.sample_count = fb_samples;
+					infer_progress = true; // progress made
+				} else {
+					any_fb_incomplete = true;
 				}
 			}
+		} while (any_fb_incomplete || infer_progress); // stop looping if all attachment have been sized or we made no progress
+
+		assert(!any_fb_incomplete && "Failed to infer sample count for all attachments.");
+
+		// finish by acquiring the renderpasses
+		for (auto& rp : impl->rpis) {
+			if (rp.attachments.size() == 0) {
+				continue;
+			}
+
 			for (auto& attrpinfo : rp.attachments) {
-				if (attrpinfo.samples.infer) {
-					attrpinfo.description.samples = (VkSampleCountFlagBits)samples.count;
+				if (attrpinfo.is_resolve_dst) {
+					attrpinfo.description.samples = VK_SAMPLE_COUNT_1_BIT;
 				} else {
-					attrpinfo.description.samples = (VkSampleCountFlagBits)attrpinfo.samples.count;
+					attrpinfo.description.samples = (VkSampleCountFlagBits)rp.fbci.sample_count.count;
 				}
 				rp.rpci.attachments.push_back(attrpinfo.description);
 			}
@@ -703,7 +759,7 @@ namespace vuk {
 				if (c.use.stages & (vuk::PipelineStageFlagBits::eComputeShader | vuk::PipelineStageFlagBits::eVertexShader |
 					vuk::PipelineStageFlagBits::eTessellationControlShader | vuk::PipelineStageFlagBits::eTessellationEvaluationShader |
 					vuk::PipelineStageFlagBits::eGeometryShader | vuk::PipelineStageFlagBits::eFragmentShader)) {
-                    usage |= vuk::ImageUsageFlagBits::eStorage;
+					usage |= vuk::ImageUsageFlagBits::eStorage;
 				}
 			}
 		}

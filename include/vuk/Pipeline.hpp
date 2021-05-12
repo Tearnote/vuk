@@ -1,31 +1,22 @@
 #pragma once
 
 #include <vector>
-#include "Hash.hpp"
-#include "CreateInfo.hpp"
-#include "Descriptor.hpp"
-#include "Program.hpp"
-#include "FixedVector.hpp"
-#include "Image.hpp"
-
-#define VUK_MAX_SETS 8
-#define VUK_MAX_ATTRIBUTES 8
-#define VUK_MAX_COLOR_ATTACHMENTS 8
-#define VUK_MAX_PUSHCONSTANT_RANGES 8
+#include <vuk/Config.hpp>
+#include <vuk/Hash.hpp>
+#include <CreateInfo.hpp>
+#include <vuk/Descriptor.hpp>
+#include <vuk/Program.hpp>
+#include <vuk/FixedVector.hpp>
+#include <vuk/Image.hpp>
 
 namespace vuk {
-	// return a/b rounded to infinity
-	constexpr uint64_t idivceil(uint64_t a, uint64_t b) noexcept {
-		return (a + b - 1) / b;
-	}
-
 	template<uint64_t Count>
 	struct Bitset {
 		static constexpr uint64_t bitmask(uint64_t const onecount) {
 			return static_cast<uint64_t>(-(onecount != 0))
 				& (static_cast<uint64_t>(-1) >> ((sizeof(uint64_t)) - onecount));
 		}
-		
+
 		static constexpr uint64_t n_bits = sizeof(uint64_t) * 8;
 		static constexpr uint64_t n_words = idivceil(Count, n_bits);
 		static constexpr uint64_t remainder = Count - n_bits * (Count / n_bits);
@@ -271,8 +262,8 @@ namespace vuk {
 		BlendFactor srcAlphaBlendFactor = BlendFactor::eZero;
 		BlendFactor dstAlphaBlendFactor = BlendFactor::eZero;
 		BlendOp alphaBlendOp = BlendOp::eAdd;
-        ColorComponentFlags colorWriteMask =
-            vuk::ColorComponentFlagBits::eR | vuk::ColorComponentFlagBits::eG | vuk::ColorComponentFlagBits::eB | vuk::ColorComponentFlagBits::eA;
+		ColorComponentFlags colorWriteMask =
+			vuk::ColorComponentFlagBits::eR | vuk::ColorComponentFlagBits::eG | vuk::ColorComponentFlagBits::eB | vuk::ColorComponentFlagBits::eA;
 	};
 	static_assert(sizeof(PipelineColorBlendAttachmentState) == sizeof(VkPipelineColorBlendAttachmentState), "struct and wrapper have different size!");
 	static_assert(std::is_standard_layout<PipelineColorBlendAttachmentState>::value, "struct wrapper is not a standard layout!");
@@ -475,7 +466,6 @@ namespace vuk {
 
 	struct PipelineBaseCreateInfoBase {
 		// 4 valid flags
-		
 		Bitset<4 * VUK_MAX_SETS * VUK_MAX_BINDINGS> binding_flags = {};
 		// set flags on specific descriptor in specific set
 		void set_binding_flags(unsigned set, unsigned binding, vuk::DescriptorBindingFlags flags) {
@@ -503,8 +493,18 @@ namespace vuk {
 		friend class CommandBuffer;
 		friend class Context;
 	public:
-		void add_shader(std::string source, std::string filename) {
+		void add_shader(ShaderSource source, std::string filename) {
 			shaders.emplace_back(std::move(source));
+			shader_paths.emplace_back(std::move(filename));
+		}
+
+		void add_glsl(std::string source, std::string filename) {
+			shaders.emplace_back(ShaderSource::glsl(std::move(source)));
+			shader_paths.emplace_back(std::move(filename));
+		}
+
+		void add_spirv(std::vector<uint32_t> source, std::string filename) {
+			shaders.emplace_back(ShaderSource::spirv(std::move(source)));
 			shader_paths.emplace_back(std::move(filename));
 		}
 
@@ -513,7 +513,7 @@ namespace vuk {
 		vuk::fixed_vector<vuk::PipelineColorBlendAttachmentState, VUK_MAX_COLOR_ATTACHMENTS> color_blend_attachments;
 		vuk::PipelineDepthStencilStateCreateInfo depth_stencil_state;
 
-		vuk::fixed_vector<std::string, 5> shaders;
+		vuk::fixed_vector<ShaderSource, 5> shaders;
 		vuk::fixed_vector<std::string, 5> shader_paths;
 
 		void set_blend(size_t attachment_index, BlendPreset);
@@ -532,7 +532,7 @@ namespace vuk {
 	};
 
 	struct PipelineBaseInfo {
-		std::string pipeline_name;
+		Name pipeline_name;
 		vuk::Program reflection_info;
 		std::vector<VkPipelineShaderStageCreateInfo> psscis;
 		VkPipelineLayout pipeline_layout;
@@ -559,15 +559,25 @@ namespace vuk {
 		friend class CommandBuffer;
 		friend class Context;
 	public:
-		void add_shader(std::string source, std::string filename) {
+		void add_shader(ShaderSource source, std::string filename) {
 			shader = std::move(source);
+			shader_path = std::move(filename);
+		}
+
+		void add_glsl(std::string source, std::string filename) {
+			shader = ShaderSource::glsl(std::move(source));
+			shader_path = std::move(filename);
+		}
+
+		void add_spirv(std::vector<uint32_t> source, std::string filename) {
+			shader = ShaderSource::spirv(std::move(source));
 			shader_path = std::move(filename);
 		}
 
 		friend struct std::hash<ComputePipelineCreateInfo>;
 		friend class PerThreadContext;
 	private:
-		std::string shader;
+		ShaderSource shader;
 		std::string shader_path;
 
 	public:
@@ -646,6 +656,19 @@ inline bool operator==(VkPushConstantRange const& lhs, VkPushConstantRange const
 		&& (lhs.size == rhs.size);
 }
 
+inline bool operator==(VkSpecializationMapEntry const& lhs, VkSpecializationMapEntry const& rhs) noexcept {
+	return (lhs.constantID == rhs.constantID)
+		&& (lhs.offset == rhs.offset)
+		&& (lhs.size == rhs.size);
+}
+
+inline bool operator==(VkSpecializationInfo const& lhs, VkSpecializationInfo const& rhs) noexcept {
+	return (lhs.dataSize == rhs.dataSize)
+		&& (lhs.pData == rhs.pData)
+		&& (lhs.mapEntryCount == rhs.mapEntryCount)
+		&& (lhs.pMapEntries == rhs.pMapEntries);
+}
+
 namespace vuk {
 	struct PipelineInstanceCreateInfo {
 		PipelineBaseInfo* base;
@@ -657,6 +680,8 @@ namespace vuk {
 		VkPipelineVertexInputStateCreateInfo vertex_input_state{ .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 		VkPipelineMultisampleStateCreateInfo multisample_state{ .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
 		VkPipelineDynamicStateCreateInfo dynamic_state{ .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+		vuk::fixed_vector<VkSpecializationMapEntry, VUK_MAX_SPECIALIZATIONCONSTANT_RANGES> smes;
+		vuk::fixed_vector<VkSpecializationInfo, 5> sis;
 		VkRenderPass render_pass;
 		uint32_t subpass;
 
@@ -667,7 +692,7 @@ namespace vuk {
 			return base == o.base && binding_descriptions == o.binding_descriptions && attribute_descriptions == o.attribute_descriptions &&
 				color_blend_attachments == o.color_blend_attachments && color_blend_state == o.color_blend_state &&
 				vertex_input_state == o.vertex_input_state && multisample_state == o.multisample_state && dynamic_state == o.dynamic_state &&
-				render_pass == o.render_pass && subpass == o.subpass;
+				render_pass == o.render_pass && subpass == o.subpass && smes == o.smes && sis == o.sis;
 		}
 	};
 
@@ -718,6 +743,15 @@ namespace std {
 			for (auto& e : x) {
 				hash_combine(h, e);
 			}
+			return h;
+		}
+	};
+
+	template <>
+	struct hash<vuk::ShaderSource> {
+		size_t operator()(vuk::ShaderSource const& x) const noexcept {
+			size_t h = 0;
+			hash_combine(h, x.is_spirv, x.data);
 			return h;
 		}
 	};
@@ -798,43 +832,43 @@ namespace std {
 	};
 
 	template<>
-    struct hash<VkPipelineColorBlendStateCreateInfo> {
-        size_t operator()(VkPipelineColorBlendStateCreateInfo const& x) const noexcept {
-            size_t h = 0;
-            hash_combine(h, x.blendConstants[0], x.blendConstants[1], x.blendConstants[2], x.blendConstants[3], x.logicOpEnable, to_integral(x.logicOp),
-                         x.attachmentCount);
-            return h;
-        }
-    };
+	struct hash<VkPipelineColorBlendStateCreateInfo> {
+		size_t operator()(VkPipelineColorBlendStateCreateInfo const& x) const noexcept {
+			size_t h = 0;
+			hash_combine(h, x.blendConstants[0], x.blendConstants[1], x.blendConstants[2], x.blendConstants[3], x.logicOpEnable, to_integral(x.logicOp),
+				x.attachmentCount);
+			return h;
+		}
+	};
 
 	template<>
-    struct hash<VkPipelineMultisampleStateCreateInfo> {
-        size_t operator()(VkPipelineMultisampleStateCreateInfo const& x) const noexcept {
-            size_t h = 0;
-            hash_combine(h, x.flags, x.alphaToCoverageEnable, x.alphaToOneEnable, x.minSampleShading, x.rasterizationSamples, x.sampleShadingEnable);
-            if(x.pSampleMask)
-                hash_combine(h, *x.pSampleMask);
-            return h;
-        }
-    };
+	struct hash<VkPipelineMultisampleStateCreateInfo> {
+		size_t operator()(VkPipelineMultisampleStateCreateInfo const& x) const noexcept {
+			size_t h = 0;
+			hash_combine(h, x.flags, x.alphaToCoverageEnable, x.alphaToOneEnable, x.minSampleShading, x.rasterizationSamples, x.sampleShadingEnable);
+			if (x.pSampleMask)
+				hash_combine(h, *x.pSampleMask);
+			return h;
+		}
+	};
 
-    template<>
-    struct hash<VkDynamicState> {
-        size_t operator()(VkDynamicState const& x) const noexcept {
-            size_t h = 0;
-            hash_combine(h, to_integral(x));
-            return h;
-        }
-    };
+	template<>
+	struct hash<VkDynamicState> {
+		size_t operator()(VkDynamicState const& x) const noexcept {
+			size_t h = 0;
+			hash_combine(h, to_integral(x));
+			return h;
+		}
+	};
 
-    template<>
-    struct hash<VkPipelineDynamicStateCreateInfo> {
-        size_t operator()(VkPipelineDynamicStateCreateInfo const& x) const noexcept {
-            size_t h = 0;
-            hash_combine(h, x.flags, std::span(x.pDynamicStates, x.dynamicStateCount));
-            return h;
-        }
-    };
+	template<>
+	struct hash<VkPipelineDynamicStateCreateInfo> {
+		size_t operator()(VkPipelineDynamicStateCreateInfo const& x) const noexcept {
+			size_t h = 0;
+			hash_combine(h, x.flags, std::span(x.pDynamicStates, x.dynamicStateCount));
+			return h;
+		}
+	};
 
 	template <>
 	struct hash<vuk::PipelineInstanceCreateInfo> {
