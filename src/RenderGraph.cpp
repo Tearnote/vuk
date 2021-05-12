@@ -66,7 +66,7 @@ namespace vuk {
 		build_io();
 
 		// sort passes
-		if (impl->passes.size() > 1) {
+		/*if (impl->passes.size() > 1) {
 			topological_sort(impl->passes.begin(), impl->passes.end(), [](const auto& p1, const auto& p2) {
 				bool could_execute_after = false;
 				bool could_execute_before = false;
@@ -103,7 +103,7 @@ namespace vuk {
 				} else
 					return false;
 				});
-		}
+		}*/
 
 		impl->use_chains.clear();
 		// assemble use chains
