@@ -6,6 +6,9 @@
 #include "Allocator.hpp"
 #include "RenderGraphImpl.hpp"
 #include <unordered_set>
+#ifdef VUK_USE_OPTICK
+#include "optick.h"
+#endif
 
 namespace vuk {
 	ExecutableRenderGraph::ExecutableRenderGraph(RenderGraph&& rg) : impl(rg.impl) {
@@ -213,6 +216,9 @@ namespace vuk {
 
 		VkCommandBufferBeginInfo cbi{ .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
 		vkBeginCommandBuffer(cbuf, &cbi);
+#ifdef VUK_USE_OPTICK
+		OPTICK_GPU_CONTEXT(cbuf);
+#endif
 
 		CommandBuffer cobuf(*this, ptc, cbuf);
 		for (auto& rpass : impl->rpis) {
@@ -238,6 +244,9 @@ namespace vuk {
 						if (p->pass.execute) {
 							secondary.current_pass = p;
 							if (!p->pass.name.is_invalid()) {
+#ifdef VUK_USE_OPTICK
+								OPTICK_GPU_EVENT(p->pass.name.c_str());
+#endif
 								ptc.ctx.debug.begin_region(cobuf.command_buffer, p->pass.name);
 								p->pass.execute(secondary);
 								ptc.ctx.debug.end_region(cobuf.command_buffer);
@@ -251,6 +260,9 @@ namespace vuk {
 						if (p->pass.execute) {
 							cobuf.current_pass = p;
 							if (!p->pass.name.is_invalid()) {
+#ifdef VUK_USE_OPTICK
+								OPTICK_GPU_EVENT(p->pass.name.c_str());
+#endif
 								ptc.ctx.debug.begin_region(cobuf.command_buffer, p->pass.name);
 								p->pass.execute(cobuf);
 								ptc.ctx.debug.end_region(cobuf.command_buffer);

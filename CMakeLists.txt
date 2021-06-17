@@ -16,6 +16,7 @@ option(VUK_BUILD_DOCS "Build docs" OFF)
 option(VUK_LINK_TO_LOADER "Link \"statically\" to the loader" ON)
 option(VUK_USE_VULKAN_SDK "Use the Vulkan SDK to locate headers and libraries" ON)
 option(VUK_USE_SHADERC "Link in shaderc for runtime compilation of shaders" ON)
+option(VUK_USE_OPTICK "Enable Optick Vulkan profiling integration" OFF)
 
 ##### Using vuk with volk (or a similar library)
 # step 1: turn off VUK_LINK_TO_LOADER and add_subdirectory vuk
@@ -45,6 +46,7 @@ elseif(VUK_USE_SHADERC)
 endif()
 
 target_compile_definitions(vuk PUBLIC VUK_USE_SHADERC=$<BOOL:${VUK_USE_SHADERC}>)
+target_compile_definitions(vuk PUBLIC VUK_USE_OPTICK=$<BOOL:${VUK_USE_OPTICK}>)
 
 set(SPIRV_CROSS_CLI OFF CACHE BOOL "")
 set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "")
