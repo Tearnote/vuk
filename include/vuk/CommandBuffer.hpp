@@ -291,7 +291,7 @@ namespace vuk {
 		void copy_image_to_buffer(Name src, Name dst, vuk::BufferImageCopy);
 
 		// explicit synchronisation
-		void image_barrier(Name, vuk::Access src_access, vuk::Access dst_access);
+		void image_barrier(Name, vuk::Access src_access, vuk::Access dst_access, uint32_t mip_level = 0, uint32_t mip_count = VK_REMAINING_MIP_LEVELS);
 
 		// queries
 		void write_timestamp(Query, vuk::PipelineStageFlagBits stage = vuk::PipelineStageFlagBits::eBottomOfPipe);
