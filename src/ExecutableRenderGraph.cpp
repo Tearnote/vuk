@@ -245,7 +245,7 @@ namespace vuk {
 							secondary.current_pass = p;
 							if (!p->pass.name.is_invalid()) {
 #ifdef VUK_USE_OPTICK
-								OPTICK_GPU_EVENT(p->pass.name.c_str());
+								OPTICK_GPU_EVENT_DYN(p->pass.name.c_str());
 #endif
 								ptc.ctx.debug.begin_region(cobuf.command_buffer, p->pass.name);
 								p->pass.execute(secondary);
@@ -261,7 +261,7 @@ namespace vuk {
 							cobuf.current_pass = p;
 							if (!p->pass.name.is_invalid()) {
 #ifdef VUK_USE_OPTICK
-								OPTICK_GPU_EVENT(p->pass.name.c_str());
+								OPTICK_GPU_EVENT_DYN(p->pass.name.c_str());
 #endif
 								ptc.ctx.debug.begin_region(cobuf.command_buffer, p->pass.name);
 								p->pass.execute(cobuf);
