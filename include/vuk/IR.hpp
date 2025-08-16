@@ -1407,7 +1407,7 @@ namespace vuk {
 		void collect_garbage(std::pmr::polymorphic_allocator<std::byte> allocator);
 	};
 
-	inline thread_local std::shared_ptr<IRModule> current_module = std::make_shared<IRModule>();
+	extern thread_local std::shared_ptr<IRModule> current_module;
 
 	struct ExtNode {
 		ExtNode(Node* node) : node(node) {

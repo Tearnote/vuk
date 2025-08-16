@@ -342,6 +342,7 @@ target_sources(vuk PRIVATE
 	src/Format.cpp
 	src/Name.cpp
 
+	src/IR.cpp
 	src/IRPasses.cpp
 	src/GraphDumper.cpp
 
